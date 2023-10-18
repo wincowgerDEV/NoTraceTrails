@@ -54,6 +54,7 @@ if (status_code == 200) {
     stop("API request failed with status code ", status_code)
 }
 
+saveRDS(data, file = "data.rds")
 
 runs_with_data <- unique(data$rubbishRunID)
 
@@ -65,7 +66,7 @@ runs <- GET(url = run_url, add_headers(headers))
 
 runs_data <- fromJSON(content(runs, "text"), flatten = TRUE)
 
-fwrite(runs_data, "runs_data.csv")
+saveRDS(runs_data, file = "runs_data.rds")
 
 unique_runs <- unique(runs_data$id)
 
@@ -76,6 +77,8 @@ movement_url <-  paste0("https://qr.rubbish.love/public/api/v1/runs/Kmi7ClumQbNp
 movements <- GET(url = movement_url, add_headers(headers))
 
 movements_data <- fromJSON(content(movements, "text"), flatten = TRUE)
+
+saveRDS(movements_data, file = "movements_data.rds")
 
 data_joined <- runs_data |> 
     select(id, distance, endLat, endLong, startLat, startLong, totalRubbishRunTime, numberOfItemsTagged, userTimeStampEnd, userName, runDescription) |>
