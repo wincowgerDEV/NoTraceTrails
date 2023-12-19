@@ -9,6 +9,9 @@ library(RColorBrewer)
 library(httr)
 library(ggplot2)
 library(rvest)
+library(NADA)
+library(tidyr)
+library(ggbreak)
 
 confidence_interval_width <- function(proportion, sample_size, population_size){
     1.96*sqrt((1/sample_size)*proportion * (1-proportion) * (population_size-sample_size)/(population_size-1))
@@ -28,25 +31,42 @@ BootMean <- function(data) {
 }
 
 #Read Cleaned Data
+
 full_points <- sf::read_sf("Full Points.geojson") %>%
-  as.data.table() %>%
-  select(Name, photoURL, lat, long, rubbishRunID, userName, rubbishType, Morphology, Brand, city, totalNumberOfItemsTagged, numberOfItemsTagged, runDescription, datetime, X, Y,Mile, dist_m)
+  left_join(sf::read_sf("Full Points.geojson") %>%
+              distinct(Mile, runDescription) %>%
+              dplyr::filter(runDescription != "") %>%
+              rename(check = runDescription) %>%
+              filter(!duplicated(Mile))) %>% #Checked this rigorously to make sure that no mile markers were duplicated that also were missing things. 
+  mutate(runDescription = ifelse(runDescription == "", check, runDescription)) %>%
+  select(Name, photoURL, lat, long, rubbishRunID, userName, rubbishType, Morphology, Brand, city, totalNumberOfItemsTagged, numberOfItemsTagged, runDescription, datetime, X, Y,Mile, dist_m) %>%
+  rename(trashpiece_lat = lat, 
+         trashpiece_long = long, 
+         rubbish_run_x = X, 
+         rubbish_run_y = Y
+         ) %>%
+  mutate(trashpiece_lat = as.numeric(trashpiece_lat), 
+         trashpiece_long = as.numeric(trashpiece_long),
+         rubbish_run_x = as.numeric(rubbish_run_x),
+         rubbish_run_y = as.numeric(rubbish_run_y)) %>%
+  as.data.table()
+
 full_summary <- sf::read_sf("Full Summary.geojson") %>%
-  filter(!Survey_Type %in% c("unconfirmed", "skipped")) %>%
+  filter(!Survey_Type %in% c("unconfirmed", "skipped", "uncomfirmed")) %>%
   as.data.table() %>%
-  select(X, Y, Mile, Survey_Type)
+  select(X, Y, Mile, Survey_Type) %>%
+  rename(MileMark_X = X, 
+         MileMark_Y = Y) %>%
+  mutate(MileMark_X = as.numeric(MileMark_X), 
+         MileMark_Y = as.numeric(MileMark_Y))
 
 joined <- inner_join(full_points, full_summary, by = "Mile") %>%
   mutate(Mile = as.integer(Mile), 
          totalNumberOfItemsTagged = as.integer(totalNumberOfItemsTagged), 
-         numberOfItemsTagged = as.integer(numberOfItemsTagged),
-         X.y = as.numeric(X.y),
-         Y.y = as.numeric(Y.y),
-         X.x = as.numeric(X.x),
-         Y.x = as.numeric(X.y)
-         ) %>%
+         numberOfItemsTagged = as.integer(numberOfItemsTagged)) %>%
   mutate(rubbishType = case_when(
     rubbishType %in% c("", "otherLitter", "uncategorized") ~ "other", 
+    totalNumberOfItemsTagged == 0 ~ NA,
     .default = rubbishType
   )) %>%
   mutate(Morphology = tolower(Morphology)) %>%
@@ -58,35 +78,172 @@ joined <- inner_join(full_points, full_summary, by = "Mile") %>%
     Morphology %in% c("sunflower seed") ~ "sunflower seeds", 
     Morphology %in% c("wipe", "toilet paper") ~ "wipes", 
     Morphology %in% c("") ~ "other", 
+    totalNumberOfItemsTagged == 0 ~ NA,
     .default = Morphology
   )) %>%
   mutate(Brand = tolower(Brand)) %>%
   mutate(Brand = case_when(
     Brand %in% c("") ~ "other", 
+    totalNumberOfItemsTagged == 0 ~ NA,
     .default = Brand
-  ))
+  )) %>%
+  mutate(Number_Of_People = as.numeric(gsub(" .*", "", str_extract(pattern = "([0-9] surveyer)|([0-9] people)|([0-9] cleaners)|([0-9] person)", runDescription)))) %>%
+  mutate(Number_Of_People = ifelse(Number_Of_People == 0, NA, Number_Of_People)) %>%
+  mutate(Reported_Mile_Marker = str_extract(pattern = "(mile [0-9]*)|([0-9]* mile)", runDescription)) %>%
+  mutate(Is_Control = grepl("(DUPLICATE)|(REPEAT)", runDescription)) %>%
+  mutate(Extrapolation_Mile_Fraction = case_when(
+    grepl("0.03 miles, stopped at 100 items, 2 suveyers; lots more trash in", runDescription) ~ 0.03,
+    grepl("0.41 miles to hit 100 pieces, 2 surveyers; trail followed dirt road- surveyed road and not sides", runDescription) ~ 0.41,
+    .default = NA
+  )) %>%
+  mutate(Snow_Percent = str_extract(Survey_Type, "[0-9]*%")) %>%
+  mutate(Snow_Percent = case_when(
+    Survey_Type == "full_snow" ~ "100%", 
+    Survey_Type == "some_snow" ~ "10%",
+    !is.na(Snow_Percent) ~ Snow_Percent,
+    .default = "0%"
+  )) %>%
+  mutate(Snow_Percent = as.numeric(gsub("%", "", Snow_Percent))) %>%
+  mutate(Night_Survey = ifelse(grepl("(late)|(night)", Survey_Type), TRUE, FALSE))
 
+set.seed(1223)
+summary_prep <- joined |>
+  group_by(Mile, 
+           rubbish_run_x, 
+           rubbish_run_y, 
+           Is_Control, 
+           Night_Survey, 
+           runDescription, 
+           Snow_Percent,
+           Number_Of_People,
+           Extrapolation_Mile_Fraction) |>
+  summarise(count = sum(as.numeric(totalNumberOfItemsTagged))) |>
+  ungroup() |>
+  as.data.frame() |>
+  mutate(count = ifelse(!is.na(Extrapolation_Mile_Fraction), count/(Extrapolation_Mile_Fraction/0.621371), count)) %>%
+  mutate(fit = cenros(summary_prep$count, summary_prep$count == 0)$modeled) %>% #replace zero values. 
+  mutate(count = ifelse(count == 0, sample(fit[fit < 1], length(fit[fit < 1]), replace = F), count)) %>%
+  select(-fit)
+  
+hist(log10(summary_prep$count))
+
+  #0.03 miles, stopped at 100 items, 2 suveyers; lots more trash in
+  #0.41 miles to hit 100 pieces, 2 surveyers; trail followed dirt road- surveyed road and not sides
+  
 #Tests
 identical(joined$Name,full_points$Name)
 !any(is.na(joined$totalNumberOfItemsTagged))
 
 #Summary stats ----
-## Concentrations ----
-summary <- joined |>
-  group_by(Mile, X.y, Y.y) |>
-  summarise(count = sum(as.numeric(totalNumberOfItemsTagged))) |>
+
+## Test bias ----
+## Controls
+control_test <- summary_prep |>
+  group_by(Mile, rubbish_run_x, rubbish_run_y, Is_Control) |>
+  summarise(count = sum(as.numeric(count))) |>
+  ungroup() |>
   as.data.frame() |>
-  st_as_sf(coords = c("X.y", "Y.y"), crs = 4326) |>
-  mutate(count_group = cut(count, breaks = c(-1,0, 1,10,200), labels = c("0", "1", "2-10", "11-103")))
+  pivot_wider(names_from = "Is_Control", values_from = "count") |>
+  filter(!is.na(`TRUE`)) |>
+  mutate(percent_accuracy = case_when(
+    `FALSE` == 0 & `TRUE` == 0 ~ 100, 
+    `FALSE` == 0 & `TRUE` == 1 ~ -100, 
+    .default = `FALSE`/(`FALSE`+`TRUE`)*100
+  ))
+
+#correction on the total counts
+mean(control_test$percent_accuracy)
+#high uncertainty suggests that we may want to follow up with a methods study to further quantify the uncertainties in the technique.
+BootMean(control_test$percent_accuracy)
+
+#Night Difference
+night_test <- summary_prep |>
+  group_by(Mile, rubbish_run_x, rubbish_run_y, Night_Survey, runDescription) |>
+  summarise(count = sum(as.numeric(count))) |>
+  ungroup() |>
+  as.data.frame() |>
+  pivot_wider(names_from = "Night_Survey", values_from = "count")
+
+#correction on the total counts
+BootMean(night_test$`FALSE`)
+BootMean(night_test$`TRUE`)
+mean(night_test$`FALSE`, na.rm = T)/mean(night_test$`TRUE`, na.rm = T) #could use this to correct for a daylight observation. 
+
+#Snow Effect
+snow_test <- summary_prep |>
+  group_by(Mile, rubbish_run_x, rubbish_run_y, Snow_Percent) |>
+  summarise(count = sum(as.numeric(count))) |>
+  ungroup() |>
+  as.data.frame() |>
+  mutate(Snow_Percent = Snow_Percent > 0) |>
+  pivot_wider(names_from = "Snow_Percent", values_from = "count")
+
+#correction on the total counts
+BootMean(snow_test$`FALSE`)
+BootMean(snow_test$`TRUE`)
+mean(snow_test$`FALSE`, na.rm = T)/mean(snow_test$`TRUE`, na.rm = T) #could use this to correct for a non-snow observation. 
+
+#Surveyor Effect
+surveyor_test <- summary_prep |>
+  group_by(Mile, rubbish_run_x, rubbish_run_y, Number_Of_People) |>
+  summarise(count = sum(as.numeric(count))) |>
+  ungroup() |>
+  as.data.frame() |>
+  filter(Number_Of_People < 5) #This point has too much leverage. 
+
+ggplot(surveyor_test, aes(x = Number_Of_People, y = count)) +
+  geom_point() +
+  scale_y_log10() +
+  geom_smooth(method = "lm")
+
+model <- lm(log10(count)~Number_Of_People, data = surveyor_test)
+summary(model) 
+#has a significant effect but maybe shouldn't include the 
+#effect because it could introduce a spatial bias to the data since single 
+#surveys were done more often in the norther states?
+
+correction_factor <- 10^(4*model$coefficients[2]+model$coefficients[1])
+
+correction_factor/0.71
+
+mean_people <- mean(surveyor_test$Number_Of_People)
+
+## Concentrations ----
+summary <- summary_prep |>
+  group_by(Mile, rubbish_run_x, rubbish_run_y, Number_Of_People) |>
+  filter(!Is_Control) |>
+  summarise(count = sum(as.numeric(count))) |>
+  ungroup() |>
+  mutate(count = ifelse(!is.na(Number_Of_People), 
+                        count * (correction_factor/10^(Number_Of_People*model$coefficients[2]+model$coefficients[1])), 
+                        count * (correction_factor/10^(mean_people*model$coefficients[2]+model$coefficients[1])))) %>%
+  mutate(count = count/(mean(control_test$percent_accuracy)/100)) |>
+  as.data.frame() |>
+  st_as_sf(coords = c("rubbish_run_x", "rubbish_run_y"), crs = 4326) |>
+  mutate(count_group = cut(count, breaks = c(-1,0, 10,100,1000,10000), labels = c("0", "1-10", "11-100", "100-1000", "1000-10000")))
 
 ggplot(summary, aes(x = Mile, y = count)) +
     geom_bar(width = 0.6, stat = "identity", color = "black") +
     theme_classic(base_size = 15) +
-    labs(y = "Count")
+    labs(y = "Count") +
+    scale_y_break(c(750, 8000))
 
 BootMean(summary$count)
 
-mean(summary$count)
+#Prediction total
+BootMean(summary$count) * 2650/0.621371
+
+#Prediction per person
+BootMean(summary$count) * 2650/0.621371 / 800
+
+
+mean(summary$count, na.rm = T) #This is being heavily upweighted by the worst site. Can mention. 
+
+median(summary$count)
+
+ggplot() +
+  stat_ecdf(aes(x = summary$count)) +
+  scale_x_log10()
 
 class(summary)
 
@@ -115,7 +272,7 @@ types_join <- joined |>
   ungroup() |>
   filter(Mile %in% summary[summary$count != 0,]$Mile) |>
   group_by(rubbishType) |>
-  summarise(mean_prop = mean(proportion), min_prop = BootMean(proportion)[1], max_prop = BootMean(proportion)[3])
+  summarise(mean_prop = mean(proportion, na.rm = T), min_prop = BootMean(proportion)[1], max_prop = BootMean(proportion)[3])
 
 sum(types_join$mean_prop)
 
@@ -149,21 +306,21 @@ morphs_join <- joined |>
   ungroup() |>
   filter(Mile %in% summary[summary$count != 0,]$Mile) |>
   group_by(Morphology) |>
-  summarise(mean_prop = mean(proportion), min_prop = BootMean(proportion)[1], max_prop = BootMean(proportion)[3])
+  summarise(mean_prop = mean(proportion, na.rm = T), min_prop = BootMean(proportion)[1], max_prop = BootMean(proportion)[3])
 
 sum(morphs_join$mean_prop)
 
 #Need to rearrange
 morphs_join %>%
   dplyr::filter(!is.na(Morphology)) %>%
-  #filter(mean_prop > 0.01) %>%
+  filter(mean_prop > 0.01) %>%
   ggplot(aes(x = reorder(Morphology, mean_prop), y = mean_prop * 100, ymin = min_prop*100 , ymax = max_prop*100)) +
   geom_bar(stat="identity") +
   geom_errorbar(colour="gray") +
   #geom_point(position=position_dodge(width=0.9), aes(y=Percent), color = "gray") + 
   coord_flip() +
   #facet_grid(.~office) +
-  theme_classic(base_size = 12) + 
+  theme_classic(base_size = 18) + 
   scale_fill_viridis_d() +
   labs(y = "Mean Percent", x = "Trash Morphology")
 
