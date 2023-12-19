@@ -104,7 +104,7 @@ joined <- inner_join(full_points, full_summary, by = "Mile") %>%
     .default = "0%"
   )) %>%
   mutate(Snow_Percent = as.numeric(gsub("%", "", Snow_Percent))) %>%
-  mutate(Night_Survey = ifelse(grepl("(late)|(night)", Survey_Type), TRUE, FALSE))
+  mutate(Night_Survey = ifelse(grepl("(night)", Survey_Type), TRUE, FALSE))
 
 set.seed(1223)
 summary_prep <- joined |>
