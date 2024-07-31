@@ -106,6 +106,8 @@ joined <- inner_join(full_points, full_summary, by = "Mile") %>%
   mutate(Snow_Percent = as.numeric(gsub("%", "", Snow_Percent))) %>%
   mutate(Night_Survey = ifelse(grepl("(night)", Survey_Type), TRUE, FALSE))
 
+fwrite(joined, "clean_data.csv")
+
 set.seed(1223)
 summary_prep <- joined |>
   group_by(Mile, 
@@ -121,7 +123,7 @@ summary_prep <- joined |>
   ungroup() |>
   as.data.frame() |>
   mutate(count = ifelse(!is.na(Extrapolation_Mile_Fraction), count/(Extrapolation_Mile_Fraction/0.621371), count)) %>%
-  mutate(fit = cenros(summary_prep$count, summary_prep$count == 0)$modeled) %>% #replace zero values. 
+  mutate(fit = cenros(.$count, .$count == 0)$modeled) %>% #replace zero values. 
   mutate(count = ifelse(count == 0, sample(fit[fit < 1], length(fit[fit < 1]), replace = F), count)) %>%
   select(-fit)
   
@@ -144,17 +146,13 @@ control_test <- summary_prep |>
   ungroup() |>
   as.data.frame() |>
   pivot_wider(names_from = "Is_Control", values_from = "count") |>
-  filter(!is.na(`TRUE`)) |>
-  mutate(percent_accuracy = case_when(
-    `FALSE` == 0 & `TRUE` == 0 ~ 100, 
-    `FALSE` == 0 & `TRUE` == 1 ~ -100, 
-    .default = `FALSE`/(`FALSE`+`TRUE`)*100
-  ))
+  filter(!is.na(`TRUE`))
 
 #correction on the total counts
-mean(control_test$percent_accuracy)
+mean(control_test$`TRUE`)/mean(control_test$`FALSE`)
 #high uncertainty suggests that we may want to follow up with a methods study to further quantify the uncertainties in the technique.
-BootMean(control_test$percent_accuracy)
+BootMean(control_test$`TRUE`)
+BootMean(control_test$`FALSE`)
 
 #Night Difference
 night_test <- summary_prep |>
@@ -167,7 +165,7 @@ night_test <- summary_prep |>
 #correction on the total counts
 BootMean(night_test$`FALSE`)
 BootMean(night_test$`TRUE`)
-mean(night_test$`FALSE`, na.rm = T)/mean(night_test$`TRUE`, na.rm = T) #could use this to correct for a daylight observation. 
+mean(night_test$`TRUE`, na.rm = T)/mean(night_test$`FALSE`, na.rm = T) #could use this to correct for a daylight observation. 
 
 #Snow Effect
 snow_test <- summary_prep |>
@@ -181,7 +179,8 @@ snow_test <- summary_prep |>
 #correction on the total counts
 BootMean(snow_test$`FALSE`)
 BootMean(snow_test$`TRUE`)
-mean(snow_test$`FALSE`, na.rm = T)/mean(snow_test$`TRUE`, na.rm = T) #could use this to correct for a non-snow observation. 
+mean(snow_test$`TRUE`, na.rm = T)/mean(snow_test$`FALSE`, na.rm = T) 
+#could use this to correct for a non-snow observation. 
 
 #Surveyor Effect
 surveyor_test <- summary_prep |>
@@ -195,12 +194,14 @@ ggplot(surveyor_test, aes(x = Number_Of_People, y = count)) +
   geom_point() +
   scale_y_log10() +
   geom_smooth(method = "lm")
-
+table(surveyor_test$Number_Of_People)
 model <- lm(log10(count)~Number_Of_People, data = surveyor_test)
 summary(model) 
 #has a significant effect but maybe shouldn't include the 
 #effect because it could introduce a spatial bias to the data since single 
 #surveys were done more often in the norther states?
+
+10^model$coefficients[2]
 
 correction_factor <- 10^(4*model$coefficients[2]+model$coefficients[1])
 
@@ -214,19 +215,19 @@ summary <- summary_prep |>
   filter(!Is_Control) |>
   summarise(count = sum(as.numeric(count))) |>
   ungroup() |>
-  mutate(count = ifelse(!is.na(Number_Of_People), 
-                        count * (correction_factor/10^(Number_Of_People*model$coefficients[2]+model$coefficients[1])), 
-                        count * (correction_factor/10^(mean_people*model$coefficients[2]+model$coefficients[1])))) %>%
-  mutate(count = count/(mean(control_test$percent_accuracy)/100)) |>
+  #mutate(count = ifelse(!is.na(Number_Of_People), 
+  #                      count * (correction_factor/10^(Number_Of_People*model$coefficients[2]+model$coefficients[1])), 
+  #                      count * (correction_factor/10^(mean_people*model$coefficients[2]+model$coefficients[1])))) %>%
+  #mutate(count = count/(mean(control_test$percent_accuracy)/100)) |>
   as.data.frame() |>
   st_as_sf(coords = c("rubbish_run_x", "rubbish_run_y"), crs = 4326) |>
   mutate(count_group = cut(count, breaks = c(-1,0, 10,100,1000,10000), labels = c("0", "1-10", "11-100", "100-1000", "1000-10000")))
 
-ggplot(summary, aes(x = Mile, y = count)) +
+ggplot(data = summary, aes(x = Mile, y = count)) +
     geom_bar(width = 0.6, stat = "identity", color = "black") +
     theme_classic(base_size = 15) +
-    labs(y = "Count") +
-    scale_y_break(c(750, 8000))
+    labs(y = "Count") #+
+    #scale_y_break(c(750, 8000))
 
 BootMean(summary$count)
 
@@ -235,7 +236,6 @@ BootMean(summary$count) * 2650/0.621371
 
 #Prediction per person
 BootMean(summary$count) * 2650/0.621371 / 800
-
 
 mean(summary$count, na.rm = T) #This is being heavily upweighted by the worst site. Can mention. 
 
@@ -374,7 +374,183 @@ brand_join %>%
   labs(y = "Mean Percent", x = "Trash Brand")
 
 
-## Raw data reading from API
+##OSM Spatial Analysis ----
+# Load necessary packages
+library(osmdata)
+library(osmextract)
+library(sf)
+library(rgdal)
+
+pct <- read_sf("Full_PCT.geojson")
+
+pct_intersections <- read_sf("cali_oregon/cali_oregon.shp")
+pct_intersections_w <- read_sf("washington_intersection/washing_intersection_points.shp")
+binded <- bind_rows(pct_intersections, pct_intersections_w) %>%
+  mutate(intersection = T)
+
+pct_points <- read_sf("Full_PCT_Mile_Marker.geojson")
+
+joined <- st_join(binded, 
+                  pct_points, 
+                  join = st_nearest_feature)
+
+pct_distances <- left_join(pct_points, joined %>% 
+                             as.data.frame() %>% 
+                             select(Mile, intersection)) %>%
+  distinct(Mile, intersection) %>%
+  arrange(Mile) %>%
+  mutate(intersection = ifelse(!is.na(intersection), T, F))
+
+# Identify mile markers with intersections
+intersection_miles <- pct_distances$Mile[pct_distances$intersection]
+
+# Function to calculate the distance to the nearest intersection
+distance_to_nearest_intersection <- function(mile, intersection_miles) {
+  min(abs(intersection_miles - mile))
+}
+
+# Apply the function to each mile marker
+pct_distances$DistanceToIntersection <- sapply(pct_distances$Mile, distance_to_nearest_intersection, intersection_miles = intersection_miles)
+
+distances <- left_join(summary, pct_distances, by = "Mile")
+
+ggplot(distances) +
+  geom_point(aes(x = count, y = DistanceToIntersection)) +
+  scale_x_log10() +
+  scale_y_log10()
+
+# Define the highway types to query
+query_highways <- c("motorway", "trunk", "primary", "secondary", "tertiary", "unclassified", "residential")
+
+# Generate the SQL query for oe_get
+highway_query <- paste0("SELECT * FROM 'lines' WHERE highway IN ('", paste(query_highways, collapse = "','"), "')")
+
+
+cali_highways = oe_get(
+  "California",
+  quiet = FALSE,
+  level = 3,
+  force_download = T,
+  query = highway_query
+)
+
+saveRDS(cali_highways, "cali_highways.rds")
+st_write(cali_highways, "cali_highways.geojson")
+
+#par(mar = rep(0.1, 4))
+#plot(sf::st_geometry(cali_highways))
+
+oregon_highways = oe_get(
+  "Oregon",
+  quiet = FALSE,
+  level = 3,
+  query = highway_query
+)
+
+oregon_intersections <- sf::st_intersection(pct, oregon_highways)
+saveRDS(oregon_intersections, "oregon_intersections.rds")
+
+saveRDS(oregon_highways, "oregon_highways.rds")
+oregon_highways <- readRDS("oregon_highways.rds")
+
+st_write(oregon_highways, "oregon_highways.geojson")
+
+washington_highways = oe_get(
+  "Washington State",
+  quiet = FALSE,
+  level = 3,
+  query = highway_query
+)
+
+saveRDS(washington_highways, "washington_highways.rds")
+washington_highways <- readRDS("washington_highways.rds")
+
+st_write(washington_highways, "washington_highways.geojson")
+
+# Create a buffer of 1 km around each point
+buffers_sf_10000 <- st_buffer(summary, dist = 10000)
+
+# Apply the function to each buffer and collect results
+osm_results_10000 <- lapply(1:nrow(buffers_sf_10000), 
+                           function(x){
+                             bbox <- st_bbox(buffers_sf_10000[x,])
+                             osm_data <- opq(bbox = bbox) %>%
+                               add_osm_feature(key = "highway", value = c("motorway", "trunk", "primary", "secondary", "tertiary", "unclassified", "residential")) %>%
+                               osmdata_sf()
+                             osm_data 
+                           })
+
+# Create a buffer of 1 km around each point
+buffers_sf_1000 <- st_buffer(summary, dist = 1000)
+
+# Apply the function to each buffer and collect results
+osm_results_1000 <- lapply(1:nrow(buffers_sf_1000), 
+                      function(x){
+                        bbox <- st_bbox(buffers_sf_1000[x,])
+                        osm_data <- opq(bbox = bbox) %>%
+                          add_osm_feature(key = "highway", value = c("motorway", "trunk", "primary", "secondary", "tertiary", "unclassified", "residential")) %>%
+                          osmdata_sf()
+                        osm_data 
+                      })
+
+# Create a buffer of 1 km around each point
+buffers_sf_100 <- st_buffer(summary, dist = 100)
+
+# Apply the function to each buffer and collect results
+osm_results_100 <- lapply(1:nrow(buffers_sf_100), 
+                           function(x){
+                             bbox <- st_bbox(buffers_sf_100[x,])
+                             osm_data <- opq(bbox = bbox) %>%
+                               add_osm_feature(key = "highway", value = c("motorway", "trunk", "primary", "secondary", "tertiary", "unclassified", "residential")) %>%
+                               osmdata_sf()
+                             osm_data 
+                           })
+
+# Create a buffer of 1 km around each point
+buffers_sf_10 <- st_buffer(summary, dist = 10)
+
+# Apply the function to each buffer and collect results
+osm_results_10 <- lapply(1:nrow(buffers_sf_10), 
+                           function(x){
+                             bbox <- st_bbox(buffers_sf_10[x,])
+                             osm_data <- opq(bbox = bbox) %>%
+                               add_osm_feature(key = "highway", value = c("motorway", "trunk", "primary", "secondary", "tertiary", "unclassified", "residential")) %>%
+                               osmdata_sf()
+                             osm_data 
+                           })
+
+saveRDS(osm_results_10000, "osm_results_10000.rds")
+saveRDS(osm_results_1000, "osm_results_1000.rds")
+saveRDS(osm_results_100, "osm_results_100.rds")
+saveRDS(osm_results_10, "osm_results_10.rds")
+
+osm_results_10000 <- readRDS("osm_results_10000.rds")
+osm_results_1000 <- readRDS("osm_results_1000.rds")
+osm_results_100 <- readRDS("osm_results_100.rds")
+osm_results_10 <- readRDS("osm_results_10.rds")
+
+summary$road_in_10000 <- vapply(osm_results_10000, function(x){!is.null(x$osm_lines)}, FUN.VALUE = logical(1))
+summary$road_in_1000 <- vapply(osm_results_1000, function(x){!is.null(x$osm_lines)}, FUN.VALUE = logical(1))
+summary$road_in_100 <- vapply(osm_results_100, function(x){!is.null(x$osm_lines)}, FUN.VALUE = logical(1))
+summary$road_in_10 <- vapply(osm_results_10, function(x){!is.null(x$osm_lines)}, FUN.VALUE = logical(1))
+
+summary$road_proximity <- ifelse(summary$road_in_10, 10, ifelse(summary$road_in_100, 100, ifelse(summary$road_in_1000, 1000, ifelse(summary$road_in_10000, 10000, 100000))))
+
+ggplot(summary, aes(x = road_proximity, y = count)) +
+  geom_point() +
+  scale_y_log10() +
+  scale_x_log10() +
+  geom_smooth()
+
+ggplot(summary, aes(x = road_in_100, y = count)) +
+  geom_boxplot() +
+  scale_y_log10()
+
+ggplot(summary, aes(x = road_in_10, y = count)) +
+  geom_boxplot() +
+  scale_y_log10()
+
+## Raw data reading from API ----
 # set the API endpoint
 bearer_token <- readLines("bearer.txt")
 
