@@ -224,10 +224,15 @@ summary <- summary_prep |>
   mutate(count_group = cut(count, breaks = c(-1,0, 10,100,1000,10000), labels = c("0", "1-10", "11-100", "100-1000", "1000-10000")))
 
 ggplot(data = summary, aes(x = Mile, y = count)) +
-    geom_bar(width = 0.6, stat = "identity", color = "black") +
+  geom_hline(yintercept = 1) +
+  geom_vline(xintercept = 1692, color = "green", linewidth = 2) +
+  geom_vline(xintercept = 2174, color = "purple", linewidth = 2) +
+    geom_line(color = "black") +
     theme_classic(base_size = 15) +
-    labs(y = "Count") #+
-    #scale_y_break(c(750, 8000))
+    labs(y = "Count") +
+    scale_y_log10() +
+  geom_smooth() 
+ 
 
 BootMean(summary$count)
 
@@ -381,174 +386,43 @@ library(osmextract)
 library(sf)
 library(rgdal)
 
-pct <- read_sf("Full_PCT.geojson")
-
-pct_intersections <- read_sf("cali_oregon/cali_oregon.shp")
-pct_intersections_w <- read_sf("washington_intersection/washing_intersection_points.shp")
-binded <- bind_rows(pct_intersections, pct_intersections_w) %>%
-  mutate(intersection = T)
-
-pct_points <- read_sf("Full_PCT_Mile_Marker.geojson")
-
-joined <- st_join(binded, 
-                  pct_points, 
-                  join = st_nearest_feature)
-
-pct_distances <- left_join(pct_points, joined %>% 
-                             as.data.frame() %>% 
-                             select(Mile, intersection)) %>%
-  distinct(Mile, intersection) %>%
-  arrange(Mile) %>%
-  mutate(intersection = ifelse(!is.na(intersection), T, F))
-
-# Identify mile markers with intersections
-intersection_miles <- pct_distances$Mile[pct_distances$intersection]
-
-# Function to calculate the distance to the nearest intersection
-distance_to_nearest_intersection <- function(mile, intersection_miles) {
-  min(abs(intersection_miles - mile))
-}
-
-# Apply the function to each mile marker
-pct_distances$DistanceToIntersection <- sapply(pct_distances$Mile, distance_to_nearest_intersection, intersection_miles = intersection_miles)
-
-distances <- left_join(summary, pct_distances, by = "Mile")
-
-ggplot(distances) +
-  geom_point(aes(x = count, y = DistanceToIntersection)) +
-  scale_x_log10() +
-  scale_y_log10()
-
-# Define the highway types to query
-query_highways <- c("motorway", "trunk", "primary", "secondary", "tertiary", "unclassified", "residential")
-
-# Generate the SQL query for oe_get
-highway_query <- paste0("SELECT * FROM 'lines' WHERE highway IN ('", paste(query_highways, collapse = "','"), "')")
-
-
-cali_highways = oe_get(
-  "California",
-  quiet = FALSE,
-  level = 3,
-  force_download = T,
-  query = highway_query
-)
-
-saveRDS(cali_highways, "cali_highways.rds")
-st_write(cali_highways, "cali_highways.geojson")
-
-#par(mar = rep(0.1, 4))
-#plot(sf::st_geometry(cali_highways))
-
-oregon_highways = oe_get(
-  "Oregon",
-  quiet = FALSE,
-  level = 3,
-  query = highway_query
-)
-
-oregon_intersections <- sf::st_intersection(pct, oregon_highways)
-saveRDS(oregon_intersections, "oregon_intersections.rds")
-
-saveRDS(oregon_highways, "oregon_highways.rds")
-oregon_highways <- readRDS("oregon_highways.rds")
-
-st_write(oregon_highways, "oregon_highways.geojson")
-
-washington_highways = oe_get(
-  "Washington State",
-  quiet = FALSE,
-  level = 3,
-  query = highway_query
-)
-
-saveRDS(washington_highways, "washington_highways.rds")
-washington_highways <- readRDS("washington_highways.rds")
-
-st_write(washington_highways, "washington_highways.geojson")
-
 # Create a buffer of 1 km around each point
-buffers_sf_10000 <- st_buffer(summary, dist = 10000)
+#distances <- 2^(3:17)
 
-# Apply the function to each buffer and collect results
-osm_results_10000 <- lapply(1:nrow(buffers_sf_10000), 
-                           function(x){
-                             bbox <- st_bbox(buffers_sf_10000[x,])
-                             osm_data <- opq(bbox = bbox) %>%
-                               add_osm_feature(key = "highway", value = c("motorway", "trunk", "primary", "secondary", "tertiary", "unclassified", "residential")) %>%
-                               osmdata_sf()
-                             osm_data 
-                           })
+#test <- logical(nrow(summary))
+#distance_to_road <- integer(nrow(summary))
 
-# Create a buffer of 1 km around each point
-buffers_sf_1000 <- st_buffer(summary, dist = 1000)
+#for(distance in distances[13:length(distances)]){
+#  print(distance)
+#  buffers_sf <- st_buffer(summary[!test,], dist = distance)
+#  osm_results <- lapply(1:nrow(buffers_sf), 
+#                           function(x){
+#                             bbox <- st_bbox(buffers_sf[x,])
+#                             osm_data <- opq(bbox = bbox) %>%
+#                               add_osm_feature(key = "highway", value = c("motorway", "trunk", "primary", "secondary", "tertiary", "unclassified", "residential")) %>%
+#                               osmdata_sf()
+#                             osm_data 
+#                           })
+#  saveRDS(osm_results, paste0("osm_results",distance, ".rds"))
+#  roads <- vapply(osm_results, function(x){!is.null(x$osm_lines)}, FUN.VALUE = logical(1))
+#  distance_to_road[!test][roads] <- distance
+#  test[!test] <- test[!test] | roads
+#}
 
-# Apply the function to each buffer and collect results
-osm_results_1000 <- lapply(1:nrow(buffers_sf_1000), 
-                      function(x){
-                        bbox <- st_bbox(buffers_sf_1000[x,])
-                        osm_data <- opq(bbox = bbox) %>%
-                          add_osm_feature(key = "highway", value = c("motorway", "trunk", "primary", "secondary", "tertiary", "unclassified", "residential")) %>%
-                          osmdata_sf()
-                        osm_data 
-                      })
+#saveRDS(distance_to_road, paste0("distance_to_road.rds"))
+distance_to_road <- readRDS(paste0("distance_to_road.rds"))
 
-# Create a buffer of 1 km around each point
-buffers_sf_100 <- st_buffer(summary, dist = 100)
-
-# Apply the function to each buffer and collect results
-osm_results_100 <- lapply(1:nrow(buffers_sf_100), 
-                           function(x){
-                             bbox <- st_bbox(buffers_sf_100[x,])
-                             osm_data <- opq(bbox = bbox) %>%
-                               add_osm_feature(key = "highway", value = c("motorway", "trunk", "primary", "secondary", "tertiary", "unclassified", "residential")) %>%
-                               osmdata_sf()
-                             osm_data 
-                           })
-
-# Create a buffer of 1 km around each point
-buffers_sf_10 <- st_buffer(summary, dist = 10)
-
-# Apply the function to each buffer and collect results
-osm_results_10 <- lapply(1:nrow(buffers_sf_10), 
-                           function(x){
-                             bbox <- st_bbox(buffers_sf_10[x,])
-                             osm_data <- opq(bbox = bbox) %>%
-                               add_osm_feature(key = "highway", value = c("motorway", "trunk", "primary", "secondary", "tertiary", "unclassified", "residential")) %>%
-                               osmdata_sf()
-                             osm_data 
-                           })
-
-saveRDS(osm_results_10000, "osm_results_10000.rds")
-saveRDS(osm_results_1000, "osm_results_1000.rds")
-saveRDS(osm_results_100, "osm_results_100.rds")
-saveRDS(osm_results_10, "osm_results_10.rds")
-
-osm_results_10000 <- readRDS("osm_results_10000.rds")
-osm_results_1000 <- readRDS("osm_results_1000.rds")
-osm_results_100 <- readRDS("osm_results_100.rds")
-osm_results_10 <- readRDS("osm_results_10.rds")
-
-summary$road_in_10000 <- vapply(osm_results_10000, function(x){!is.null(x$osm_lines)}, FUN.VALUE = logical(1))
-summary$road_in_1000 <- vapply(osm_results_1000, function(x){!is.null(x$osm_lines)}, FUN.VALUE = logical(1))
-summary$road_in_100 <- vapply(osm_results_100, function(x){!is.null(x$osm_lines)}, FUN.VALUE = logical(1))
-summary$road_in_10 <- vapply(osm_results_10, function(x){!is.null(x$osm_lines)}, FUN.VALUE = logical(1))
-
-summary$road_proximity <- ifelse(summary$road_in_10, 10, ifelse(summary$road_in_100, 100, ifelse(summary$road_in_1000, 1000, ifelse(summary$road_in_10000, 10000, 100000))))
+summary$road_proximity <- distance_to_road
 
 ggplot(summary, aes(x = road_proximity, y = count)) +
   geom_point() +
   scale_y_log10() +
   scale_x_log10() +
-  geom_smooth()
+  geom_smooth(method = "lm")
 
-ggplot(summary, aes(x = road_in_100, y = count)) +
-  geom_boxplot() +
-  scale_y_log10()
+model <- lm(log10(count)~log10(road_proximity), data = summary)
+summary(model) 
 
-ggplot(summary, aes(x = road_in_10, y = count)) +
-  geom_boxplot() +
-  scale_y_log10()
 
 ## Raw data reading from API ----
 # set the API endpoint
@@ -660,4 +534,156 @@ fwrite(Samples_Map_with_dist, "G:/My Drive/MooreInstitute/Projects/NoTraceTrails
 
 mapview(Samples_Map_with_dist, zcol = 'reportedTimeStamp', legend = FALSE) #+
 
+##Intersection test
+
+pct <- read_sf("Full_PCT.geojson")
+
+pct_intersections <- read_sf("cali_oregon/cali_oregon.shp")
+pct_intersections_w <- read_sf("washington_intersection/washing_intersection_points.shp")
+binded <- bind_rows(pct_intersections, pct_intersections_w) %>%
+  mutate(intersection = T)
+
+pct_points <- read_sf("Full_PCT_Mile_Marker.geojson")
+
+joined <- st_join(binded, 
+                  pct_points, 
+                  join = st_nearest_feature)
+
+pct_distances <- left_join(pct_points, joined %>% 
+                             as.data.frame() %>% 
+                             select(Mile, intersection)) %>%
+  distinct(Mile, intersection) %>%
+  arrange(Mile) %>%
+  mutate(intersection = ifelse(!is.na(intersection), T, F))
+
+# Identify mile markers with intersections
+intersection_miles <- pct_distances$Mile[pct_distances$intersection]
+
+# Function to calculate the distance to the nearest intersection
+distance_to_nearest_intersection <- function(mile, intersection_miles) {
+  min(abs(intersection_miles - mile))
+}
+
+# Apply the function to each mile marker
+pct_distances$DistanceToIntersection <- sapply(pct_distances$Mile, distance_to_nearest_intersection, intersection_miles = intersection_miles)
+
+distances <- left_join(summary, pct_distances, by = "Mile")
+
+ggplot(distances) +
+  geom_point(aes(x = count, y = DistanceToIntersection)) +
+  scale_x_log10() +
+  scale_y_log10()
+
+# Define the highway types to query
+query_highways <- c("motorway", "trunk", "primary", "secondary", "tertiary", "unclassified", "residential")
+
+# Generate the SQL query for oe_get
+highway_query <- paste0("SELECT * FROM 'lines' WHERE highway IN ('", paste(query_highways, collapse = "','"), "')")
+
+
+cali_highways = oe_get(
+  "California",
+  quiet = FALSE,
+  level = 3,
+  force_download = T,
+  query = highway_query
+)
+
+saveRDS(cali_highways, "cali_highways.rds")
+st_write(cali_highways, "cali_highways.geojson")
+
+#par(mar = rep(0.1, 4))
+#plot(sf::st_geometry(cali_highways))
+
+oregon_highways = oe_get(
+  "Oregon",
+  quiet = FALSE,
+  level = 3,
+  query = highway_query
+)
+
+oregon_intersections <- sf::st_intersection(pct, oregon_highways)
+saveRDS(oregon_intersections, "oregon_intersections.rds")
+
+saveRDS(oregon_highways, "oregon_highways.rds")
+oregon_highways <- readRDS("oregon_highways.rds")
+
+st_write(oregon_highways, "oregon_highways.geojson")
+
+washington_highways = oe_get(
+  "Washington State",
+  quiet = FALSE,
+  level = 3,
+  query = highway_query
+)
+
+saveRDS(washington_highways, "washington_highways.rds")
+washington_highways <- readRDS("washington_highways.rds")
+
+st_write(washington_highways, "washington_highways.geojson")
+
+
+# Create a buffer of 1 km around each point
+buffers_sf_10000 <- st_buffer(summary, dist = 10000)
+
+# Apply the function to each buffer and collect results
+osm_results_10000 <- lapply(1:nrow(buffers_sf_10000), 
+                            function(x){
+                              bbox <- st_bbox(buffers_sf_10000[x,])
+                              osm_data <- opq(bbox = bbox) %>%
+                                add_osm_feature(key = "highway", value = c("motorway", "trunk", "primary", "secondary", "tertiary", "unclassified", "residential")) %>%
+                                osmdata_sf()
+                              osm_data 
+                            })
+
+# Create a buffer of 1 km around each point
+buffers_sf_1000 <- st_buffer(summary, dist = 1000)
+
+# Apply the function to each buffer and collect results
+osm_results_1000 <- lapply(1:nrow(buffers_sf_1000), 
+                           function(x){
+                             bbox <- st_bbox(buffers_sf_1000[x,])
+                             osm_data <- opq(bbox = bbox) %>%
+                               add_osm_feature(key = "highway", value = c("motorway", "trunk", "primary", "secondary", "tertiary", "unclassified", "residential")) %>%
+                               osmdata_sf()
+                             osm_data 
+                           })
+
+# Create a buffer of 1 km around each point
+buffers_sf_100 <- st_buffer(summary, dist = 100)
+
+# Apply the function to each buffer and collect results
+osm_results_100 <- lapply(1:nrow(buffers_sf_100), 
+                          function(x){
+                            bbox <- st_bbox(buffers_sf_100[x,])
+                            osm_data <- opq(bbox = bbox) %>%
+                              add_osm_feature(key = "highway", value = c("motorway", "trunk", "primary", "secondary", "tertiary", "unclassified", "residential")) %>%
+                              osmdata_sf()
+                            osm_data 
+                          })
+
+# Apply the function to each buffer and collect results
+osm_results_10 <- lapply(1:nrow(buffers_sf_10), 
+                         function(x){
+                           bbox <- st_bbox(buffers_sf_10[x,])
+                           osm_data <- opq(bbox = bbox) %>%
+                             add_osm_feature(key = "highway", value = c("motorway", "trunk", "primary", "secondary", "tertiary", "unclassified", "residential")) %>%
+                             osmdata_sf()
+                           osm_data 
+                         })
+
+saveRDS(osm_results_10000, "osm_results_10000.rds")
+saveRDS(osm_results_1000, "osm_results_1000.rds")
+saveRDS(osm_results_100, "osm_results_100.rds")
+saveRDS(osm_results_10, "osm_results_10.rds")
+
+osm_results_10000 <- readRDS("osm_results_10000.rds")
+osm_results_1000 <- readRDS("osm_results_1000.rds")
+osm_results_100 <- readRDS("osm_results_100.rds")
+osm_results_10 <- readRDS("osm_results_10.rds")
+
+summary$road_in_10000 <- vapply(osm_results_10000, function(x){!is.null(x$osm_lines)}, FUN.VALUE = logical(1))
+summary$road_in_1000 <- vapply(osm_results_1000, function(x){!is.null(x$osm_lines)}, FUN.VALUE = logical(1))
+summary$road_in_100 <- vapply(osm_results_100, function(x){!is.null(x$osm_lines)}, FUN.VALUE = logical(1))
+summary$road_in_10 <- vapply(osm_results_10, function(x){!is.null(x$osm_lines)}, FUN.VALUE = logical(1))
 
