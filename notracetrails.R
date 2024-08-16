@@ -149,7 +149,7 @@ control_test <- summary_prep |>
   filter(!is.na(`TRUE`))
 
 #correction on the total counts
-mean(control_test$`TRUE`)/mean(control_test$`FALSE`)
+control_correction_factor <- mean(control_test$`FALSE`)/mean(control_test$`TRUE`)
 #high uncertainty suggests that we may want to follow up with a methods study to further quantify the uncertainties in the technique.
 BootMean(control_test$`TRUE`)
 BootMean(control_test$`FALSE`)
@@ -165,7 +165,7 @@ night_test <- summary_prep |>
 #correction on the total counts
 BootMean(night_test$`FALSE`)
 BootMean(night_test$`TRUE`)
-mean(night_test$`TRUE`, na.rm = T)/mean(night_test$`FALSE`, na.rm = T) #could use this to correct for a daylight observation. 
+night_cor_factor <- mean(night_test$`FALSE`, na.rm = T)/mean(night_test$`TRUE`, na.rm = T) #could use this to correct for a daylight observation. 
 
 #Snow Effect
 snow_test <- summary_prep |>
@@ -179,7 +179,7 @@ snow_test <- summary_prep |>
 #correction on the total counts
 BootMean(snow_test$`FALSE`)
 BootMean(snow_test$`TRUE`)
-mean(snow_test$`TRUE`, na.rm = T)/mean(snow_test$`FALSE`, na.rm = T) 
+snow_correction_factor <- mean(snow_test$`FALSE`, na.rm = T)/mean(snow_test$`TRUE`, na.rm = T) 
 #could use this to correct for a non-snow observation. 
 
 #Surveyor Effect
@@ -194,16 +194,18 @@ ggplot(surveyor_test, aes(x = Number_Of_People, y = count)) +
   geom_point() +
   scale_y_log10() +
   geom_smooth(method = "lm")
+
+sum(is.na(summary_prep$Number_Of_People))
 table(surveyor_test$Number_Of_People)
-model <- lm(log10(count)~Number_Of_People, data = surveyor_test)
-summary(model) 
+model_people <- lm(log10(count)~Number_Of_People, data = surveyor_test)
+summary(model_people) 
 #has a significant effect but maybe shouldn't include the 
 #effect because it could introduce a spatial bias to the data since single 
 #surveys were done more often in the norther states?
 
-10^model$coefficients[2]
+10^model_people$coefficients[2]
 
-correction_factor <- 10^(4*model$coefficients[2]+model$coefficients[1])
+correction_factor <- 10^(4*model_people$coefficients[2]+model_people$coefficients[1])
 
 correction_factor/0.71
 
@@ -211,14 +213,16 @@ mean_people <- mean(surveyor_test$Number_Of_People)
 
 ## Concentrations ----
 summary <- summary_prep |>
-  group_by(Mile, rubbish_run_x, rubbish_run_y, Number_Of_People) |>
+  group_by(Mile, rubbish_run_x, rubbish_run_y, Number_Of_People, Night_Survey, Snow_Percent) |>
   filter(!Is_Control) |>
   summarise(count = sum(as.numeric(count))) |>
   ungroup() |>
-  #mutate(count = ifelse(!is.na(Number_Of_People), 
-  #                      count * (correction_factor/10^(Number_Of_People*model$coefficients[2]+model$coefficients[1])), 
-  #                      count * (correction_factor/10^(mean_people*model$coefficients[2]+model$coefficients[1])))) %>%
-  #mutate(count = count/(mean(control_test$percent_accuracy)/100)) |>
+  mutate(count_people_cor = ifelse(!is.na(Number_Of_People), 
+                        count * (correction_factor/10^(Number_Of_People*model_people$coefficients[2]+model_people$coefficients[1])), 
+                        count * (correction_factor/10^(mean_people*model_people$coefficients[2]+model_people$coefficients[1])))) %>%
+  mutate(count_surveyor_acc = count*control_correction_factor) |>
+  mutate(count_night = ifelse(Night_Survey, count*night_cor_factor, count)) |>
+  mutate(count_snow = ifelse(Snow_Percent > 0, count*snow_correction_factor, count)) |>
   as.data.frame() |>
   st_as_sf(coords = c("rubbish_run_x", "rubbish_run_y"), crs = 4326) |>
   mutate(count_group = cut(count, breaks = c(-1,0, 10,100,1000,10000), labels = c("0", "1-10", "11-100", "100-1000", "1000-10000")))
@@ -236,15 +240,36 @@ ggplot(data = summary, aes(x = Mile, y = count)) +
 
 BootMean(summary$count)
 
+BootMean(summary$count_people_cor)
+
+BootMean(summary$count_surveyor_acc)
+
+BootMean(summary$count_night)
+
+BootMean(summary$count_snow)
+
+
+mean(summary$count)
+
+mean(summary$count_people_cor)
+
+mean(summary$count_surveyor_acc)
+
+mean(summary$count_night)
+
+mean(summary$count_snow)
+
 #Prediction total
 BootMean(summary$count) * 2650/0.621371
 
 #Prediction per person
 BootMean(summary$count) * 2650/0.621371 / 800
 
-mean(summary$count, na.rm = T) #This is being heavily upweighted by the worst site. Can mention. 
+mean(summary$count, na.rm = T) * 2650/0.621371 #This is being heavily upweighted by the worst site. Can mention. 
 
-median(summary$count)
+#Surveys without counts
+sum(summary$count < 1)/length(summary$count)
+
 
 ggplot() +
   stat_ecdf(aes(x = summary$count)) +
@@ -331,8 +356,11 @@ morphs_join %>%
 
 #Percent that can be branded
 
-unique(joined$Brand) |>
-  sort()
+table(joined$Brand)
+
+sum(joined$totalNumberOfItemsTagged[joined$Brand != "other"])
+
+sum(joined$totalNumberOfItemsTagged[joined$Brand == "other"])/sum(joined$totalNumberOfItemsTagged)
 
 grid3 = expand.grid(Mile = unique(summary$Mile), Brand = unique(joined$Brand))
 
