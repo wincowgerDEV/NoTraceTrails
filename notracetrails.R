@@ -12,6 +12,7 @@ library(rvest)
 library(NADA)
 library(tidyr)
 library(ggbreak)
+library(stringr)
 
 confidence_interval_width <- function(proportion, sample_size, population_size){
     1.96*sqrt((1/sample_size)*proportion * (1-proportion) * (population_size-sample_size)/(population_size-1))
@@ -231,7 +232,7 @@ ggplot(data = summary, aes(x = Mile, y = count)) +
   geom_hline(yintercept = 1) +
   geom_vline(xintercept = 1692, color = "green", linewidth = 2) +
   geom_vline(xintercept = 2174, color = "purple", linewidth = 2) +
-    geom_line(color = "black") +
+    geom_point(color = "black") +
     theme_classic(base_size = 15) +
     labs(y = "Count") +
     scale_y_log10() +
@@ -412,7 +413,6 @@ brand_join %>%
 library(osmdata)
 library(osmextract)
 library(sf)
-library(rgdal)
 
 # Create a buffer of 1 km around each point
 #distances <- 2^(3:17)
