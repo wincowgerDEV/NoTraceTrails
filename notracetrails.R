@@ -194,7 +194,9 @@ surveyor_test <- summary_prep |>
 ggplot(surveyor_test, aes(x = Number_Of_People, y = count)) +
   geom_point() +
   scale_y_log10() +
-  geom_smooth(method = "lm")
+  geom_smooth(method = "lm") +
+  theme_classic(base_size = 14) +
+  labs(y = "Count", x = "Number of People")
 
 sum(is.na(summary_prep$Number_Of_People))
 table(surveyor_test$Number_Of_People)
@@ -228,14 +230,15 @@ summary <- summary_prep |>
   st_as_sf(coords = c("rubbish_run_x", "rubbish_run_y"), crs = 4326) |>
   mutate(count_group = cut(count, breaks = c(-1,0, 10,100,1000,10000), labels = c("0", "1-10", "11-100", "100-1000", "1000-10000")))
 
+options(scipen = 99)
 ggplot(data = summary, aes(x = Mile, y = count)) +
   geom_hline(yintercept = 1) +
   geom_vline(xintercept = 1692, color = "green", linewidth = 2) +
   geom_vline(xintercept = 2174, color = "purple", linewidth = 2) +
     geom_point(color = "black") +
     theme_classic(base_size = 15) +
-    labs(y = "Count") +
-    scale_y_log10() +
+    labs(y = "Count per km", x = "Mile Marker (1.6 km Marker)") +
+    scale_y_log10(breaks = c(10^(-2:4))) +
   geom_smooth() 
  
 
@@ -310,6 +313,7 @@ sum(types_join$mean_prop)
 #Need to rearrange
 types_join %>%
     dplyr::filter(!is.na(rubbishType)) %>%
+  mutate(rubbishType = ifelse(rubbishType == "cloth", "textile", rubbishType)) %>%
   ggplot(aes(x = reorder(rubbishType, mean_prop), y = mean_prop * 100, ymin = min_prop*100 , ymax = max_prop*100)) +
   geom_bar(stat="identity") +
   geom_errorbar(colour="gray") +
@@ -318,7 +322,7 @@ types_join %>%
   #facet_grid(.~office) +
   theme_classic(base_size = 20) + 
   scale_fill_viridis_d() +
-  labs(y = "Mean Percent", x = "Trash Type")
+  labs(y = "Mean Percent", x = "Trash Morphology")
 
 unique(joined$Morphology) |>
   sort()
@@ -444,9 +448,12 @@ summary$road_proximity <- distance_to_road
 
 ggplot(summary, aes(x = road_proximity, y = count)) +
   geom_point() +
-  scale_y_log10() +
+  scale_y_log10(breaks = 10^(-2:4)) +
   scale_x_log10() +
-  geom_smooth(method = "lm")
+  geom_smooth(method = "lm") +
+  theme_classic(base_size = 14) +
+  ggplot2::coord_fixed() +
+  labs(x = "Road Proximity (m)", y = "Count per km")
 
 model <- lm(log10(count)~log10(road_proximity), data = summary)
 summary(model) 
