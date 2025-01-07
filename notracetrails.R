@@ -284,7 +284,7 @@ class(summary)
 #mapview(pct, legend = FALSE, color = "gray") +
 mapview(summary, zcol = 'count_group', stroke = NA, cex = 2, alpha.regions = 0.75, legend = TRUE, color = hcl.colors(4, palette = "ArmyRose")) 
 
-fwrite(summary, "G:/My Drive/MooreInstitute/Projects/NoTraceTrails/summary.csv")
+fwrite(summary, "summary.csv")
 
 ## Trash Types ----
 
@@ -322,7 +322,7 @@ types_join %>%
   #facet_grid(.~office) +
   theme_classic(base_size = 20) + 
   scale_fill_viridis_d() +
-  labs(y = "Mean Percent", x = "Trash Morphology")
+  labs(y = "Mean Percent", x = "Trash Material")
 
 unique(joined$Morphology) |>
   sort()
@@ -565,98 +565,11 @@ unique(Samples_Map_with_dist$totalNumberOfItemsTagged) #Make sure nothing weird 
 distinct(Samples_Map_with_dist, Mile, rubbishRunID) #Issue several rubbish run ids for some of the points and some locations don't have data. 
 filter(Samples_Map_with_dist, dist_m > 5000) #Test if some surveys occur greater than 5 km of a survey location. 
 
-fwrite(Samples_Map_with_dist, "G:/My Drive/MooreInstitute/Projects/NoTraceTrails/Samples_Map_with_dist.csv")
+fwrite(Samples_Map_with_dist, "Samples_Map_with_dist.csv")
 
 mapview(Samples_Map_with_dist, zcol = 'reportedTimeStamp', legend = FALSE) #+
 
-##Intersection test
-
-pct <- read_sf("Full_PCT.geojson")
-
-pct_intersections <- read_sf("cali_oregon/cali_oregon.shp")
-pct_intersections_w <- read_sf("washington_intersection/washing_intersection_points.shp")
-binded <- bind_rows(pct_intersections, pct_intersections_w) %>%
-  mutate(intersection = T)
-
-pct_points <- read_sf("Full_PCT_Mile_Marker.geojson")
-
-joined <- st_join(binded, 
-                  pct_points, 
-                  join = st_nearest_feature)
-
-pct_distances <- left_join(pct_points, joined %>% 
-                             as.data.frame() %>% 
-                             select(Mile, intersection)) %>%
-  distinct(Mile, intersection) %>%
-  arrange(Mile) %>%
-  mutate(intersection = ifelse(!is.na(intersection), T, F))
-
-# Identify mile markers with intersections
-intersection_miles <- pct_distances$Mile[pct_distances$intersection]
-
-# Function to calculate the distance to the nearest intersection
-distance_to_nearest_intersection <- function(mile, intersection_miles) {
-  min(abs(intersection_miles - mile))
-}
-
-# Apply the function to each mile marker
-pct_distances$DistanceToIntersection <- sapply(pct_distances$Mile, distance_to_nearest_intersection, intersection_miles = intersection_miles)
-
-distances <- left_join(summary, pct_distances, by = "Mile")
-
-ggplot(distances) +
-  geom_point(aes(x = count, y = DistanceToIntersection)) +
-  scale_x_log10() +
-  scale_y_log10()
-
-# Define the highway types to query
-query_highways <- c("motorway", "trunk", "primary", "secondary", "tertiary", "unclassified", "residential")
-
-# Generate the SQL query for oe_get
-highway_query <- paste0("SELECT * FROM 'lines' WHERE highway IN ('", paste(query_highways, collapse = "','"), "')")
-
-
-cali_highways = oe_get(
-  "California",
-  quiet = FALSE,
-  level = 3,
-  force_download = T,
-  query = highway_query
-)
-
-saveRDS(cali_highways, "cali_highways.rds")
-st_write(cali_highways, "cali_highways.geojson")
-
-#par(mar = rep(0.1, 4))
-#plot(sf::st_geometry(cali_highways))
-
-oregon_highways = oe_get(
-  "Oregon",
-  quiet = FALSE,
-  level = 3,
-  query = highway_query
-)
-
-oregon_intersections <- sf::st_intersection(pct, oregon_highways)
-saveRDS(oregon_intersections, "oregon_intersections.rds")
-
-saveRDS(oregon_highways, "oregon_highways.rds")
-oregon_highways <- readRDS("oregon_highways.rds")
-
-st_write(oregon_highways, "oregon_highways.geojson")
-
-washington_highways = oe_get(
-  "Washington State",
-  quiet = FALSE,
-  level = 3,
-  query = highway_query
-)
-
-saveRDS(washington_highways, "washington_highways.rds")
-washington_highways <- readRDS("washington_highways.rds")
-
-st_write(washington_highways, "washington_highways.geojson")
-
+## Intersection test
 
 # Create a buffer of 1 km around each point
 buffers_sf_10000 <- st_buffer(summary, dist = 10000)
