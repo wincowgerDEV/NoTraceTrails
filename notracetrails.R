@@ -109,6 +109,16 @@ joined <- inner_join(full_points, full_summary, by = "Mile") %>%
 
 fwrite(joined, "clean_data.csv")
 
+morph_categories <- joined %>%
+  distinct(Morphology)
+
+fwrite(moph_categories, "morphologies.csv")
+
+mat_categories <- joined %>%
+  distinct(rubbishType)
+
+fwrite(mat_categories, "materials.csv")
+
 set.seed(1223)
 summary_prep <- joined |>
   group_by(Mile, 
