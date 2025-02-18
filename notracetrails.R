@@ -196,7 +196,7 @@ ggplot(surveyor_test, aes(x = Number_Of_People, y = count)) +
   scale_y_log10() +
   geom_smooth(method = "lm") +
   theme_classic(base_size = 14) +
-  labs(y = "Count", x = "Number of People")
+  labs(y = "Trash Count per km", x = "Number of Surveyors")
 
 sum(is.na(summary_prep$Number_Of_People))
 table(surveyor_test$Number_Of_People)
@@ -237,7 +237,7 @@ ggplot(data = summary, aes(x = Mile, y = count)) +
   geom_vline(xintercept = 2174, color = "purple", linewidth = 2) +
     geom_point(color = "black") +
     theme_classic(base_size = 15) +
-    labs(y = "Count per km", x = "Mile Marker (1.6 km Marker)") +
+    labs(y = "Trash Count per km", x = "Mile Marker (1.6 km Marker)") +
     scale_y_log10(breaks = c(10^(-2:4))) +
   geom_smooth() 
  
@@ -341,7 +341,8 @@ morphs_join <- joined |>
   ungroup() |>
   filter(Mile %in% summary[summary$count != 0,]$Mile) |>
   group_by(Morphology) |>
-  summarise(mean_prop = mean(proportion, na.rm = T), min_prop = BootMean(proportion)[1], max_prop = BootMean(proportion)[3])
+  summarise(mean_prop = mean(proportion, na.rm = T), min_prop = BootMean(proportion)[1], max_prop = BootMean(proportion)[3]) %>%
+  mutate(Morphology = gsub("s$", "", Morphology, ignore.case = T))
 
 sum(morphs_join$mean_prop)
 
@@ -453,7 +454,7 @@ ggplot(summary, aes(x = road_proximity, y = count)) +
   geom_smooth(method = "lm") +
   theme_classic(base_size = 14) +
   ggplot2::coord_fixed() +
-  labs(x = "Road Proximity (m)", y = "Count per km")
+  labs(x = "Road Proximity (m)", y = "Trash Count per km")
 
 model <- lm(log10(count)~log10(road_proximity), data = summary)
 summary(model) 
