@@ -112,7 +112,7 @@ fwrite(joined, "clean_data.csv")
 morph_categories <- joined %>%
   distinct(Morphology)
 
-fwrite(moph_categories, "morphologies.csv")
+fwrite(morph_categories, "morphologies.csv")
 
 mat_categories <- joined %>%
   distinct(rubbishType)
