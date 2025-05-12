@@ -50,7 +50,10 @@ full_points <- sf::read_sf("Full Points.geojson") %>%
          trashpiece_long = as.numeric(trashpiece_long),
          rubbish_run_x = as.numeric(rubbish_run_x),
          rubbish_run_y = as.numeric(rubbish_run_y)) %>%
-  as.data.table()
+  as.data.table() %>%
+  mutate(Mile = as.integer(Mile)) %>%
+  filter(Mile != 490) %>%
+  mutate(Mile = ifelse(grepl("mile 490 survey,", runDescription), 490, Mile))
 
 full_summary <- sf::read_sf("Full Summary.geojson") %>%
   filter(!Survey_Type %in% c("unconfirmed", "skipped", "uncomfirmed")) %>%
@@ -59,11 +62,11 @@ full_summary <- sf::read_sf("Full Summary.geojson") %>%
   rename(MileMark_X = X, 
          MileMark_Y = Y) %>%
   mutate(MileMark_X = as.numeric(MileMark_X), 
-         MileMark_Y = as.numeric(MileMark_Y))
+         MileMark_Y = as.numeric(MileMark_Y)) %>%
+  mutate(Mile = as.integer(Mile))
 
 joined <- inner_join(full_points, full_summary, by = "Mile") %>%
-  mutate(Mile = as.integer(Mile), 
-         totalNumberOfItemsTagged = as.integer(totalNumberOfItemsTagged), 
+  mutate(totalNumberOfItemsTagged = as.integer(totalNumberOfItemsTagged), 
          numberOfItemsTagged = as.integer(numberOfItemsTagged)) %>%
   mutate(rubbishType = case_when(
     rubbishType %in% c("", "otherLitter", "uncategorized") ~ "other", 
@@ -120,7 +123,7 @@ mat_categories <- joined %>%
 fwrite(mat_categories, "materials.csv")
 
 set.seed(1223)
-summary_prep <- joined |>
+summary_prep <- joined %>%
   group_by(Mile, 
            rubbish_run_x, 
            rubbish_run_y, 
@@ -129,10 +132,10 @@ summary_prep <- joined |>
            runDescription, 
            Snow_Percent,
            Number_Of_People,
-           Extrapolation_Mile_Fraction) |>
-  summarise(count = sum(as.numeric(totalNumberOfItemsTagged))) |>
-  ungroup() |>
-  as.data.frame() |>
+           Extrapolation_Mile_Fraction) %>%
+  summarise(count = sum(as.numeric(totalNumberOfItemsTagged))) %>%
+  ungroup() %>%
+  as.data.frame() %>%
   mutate(count = ifelse(!is.na(Extrapolation_Mile_Fraction), count/(Extrapolation_Mile_Fraction/0.621371), count)) %>%
   mutate(fit = cenros(.$count, .$count == 0)$modeled) %>% #replace zero values. 
   mutate(count = ifelse(count == 0, sample(fit[fit < 1], length(fit[fit < 1]), replace = F), count)) %>%
@@ -206,7 +209,7 @@ ggplot(surveyor_test, aes(x = Number_Of_People, y = count)) +
   scale_y_log10() +
   geom_smooth(method = "lm") +
   theme_classic(base_size = 14) +
-  labs(y = "Trash Count per km", x = "Number of Surveyors")
+  labs(y = "Waste Count per km (log10 scale)", x = "Number of Surveyors")
 
 sum(is.na(summary_prep$Number_Of_People))
 table(surveyor_test$Number_Of_People)
@@ -240,16 +243,25 @@ summary <- summary_prep |>
   st_as_sf(coords = c("rubbish_run_x", "rubbish_run_y"), crs = 4326) |>
   mutate(count_group = cut(count, breaks = c(-1,0, 10,100,1000,10000), labels = c("0", "1-10", "11-100", "100-1000", "1000-10000")))
 
+#should be false
+duplicated(summary$Mile) |> any()
+
 options(scipen = 99)
-ggplot(data = summary, aes(x = Mile, y = count)) +
+ggplot() +
   geom_hline(yintercept = 1) +
-  geom_vline(xintercept = 1692, color = "green", linewidth = 2) +
-  geom_vline(xintercept = 2174, color = "purple", linewidth = 2) +
-    geom_point(color = "black") +
+  geom_text(aes(x = 1500, y = 1000, label = "California")) +
+  geom_text(aes(x = 3100, y = 1000, label = "Oregon")) +
+  geom_text(aes(x = 4000, y = 1000, label = "Washington")) +
+  geom_text(aes(x = 100, y = 0.01, label = "Mexico")) +
+  geom_text(aes(x = 4300, y = 0.01, label = "Canada")) +
+  
+  geom_vline(xintercept = 1692*1.61) +
+  geom_vline(xintercept = 2174*1.61) +
+    geom_point(data = summary, aes(x = Mile*1.61, y = count), color = "black") +
     theme_classic(base_size = 15) +
-    labs(y = "Trash Count per km", x = "Mile Marker (1.6 km Marker)") +
+    labs(y = "Waste Count per km (log10 scale)", x = "Length of Trail (km)") +
     scale_y_log10(breaks = c(10^(-2:4))) +
-  geom_smooth() 
+  geom_smooth(data = summary, aes(x = Mile*1.61, y = count)) 
  
 
 BootMean(summary$count)
@@ -291,10 +303,12 @@ ggplot() +
 
 class(summary)
 
+
 #mapview(pct, legend = FALSE, color = "gray") +
 mapview(summary, zcol = 'count_group', stroke = NA, cex = 2, alpha.regions = 0.75, legend = TRUE, color = hcl.colors(4, palette = "ArmyRose")) 
 
 fwrite(summary, "summary.csv")
+saveRDS(summary, "summary.rds")
 
 ## Trash Types ----
 
@@ -316,7 +330,8 @@ types_join <- joined |>
   ungroup() |>
   filter(Mile %in% summary[summary$count != 0,]$Mile) |>
   group_by(rubbishType) |>
-  summarise(mean_prop = mean(proportion, na.rm = T), min_prop = BootMean(proportion)[1], max_prop = BootMean(proportion)[3])
+  summarise(mean_prop = mean(proportion, na.rm = T), min_prop = BootMean(proportion)[1], max_prop = BootMean(proportion)[3]) |>
+  filter(mean_prop >= 0.01)
 
 sum(types_join$mean_prop)
 
@@ -332,10 +347,37 @@ types_join %>%
   #facet_grid(.~office) +
   theme_classic(base_size = 20) + 
   scale_fill_viridis_d() +
-  labs(y = "Mean Percent", x = "Trash Material")
+  labs(y = "Mean Percent", x = "Waste Material")
 
-unique(joined$Morphology) |>
-  sort()
+
+#Types spatial
+
+types_join_spatial <- joined |>
+  as.data.table(.data) |>
+  group_by(Mile, rubbishType) |>
+  summarise(total_count = sum(as.numeric(totalNumberOfItemsTagged))) |>
+  ungroup()|>
+  right_join(grid) |>
+  mutate(total_count = ifelse(is.na(total_count), 0, total_count)) |>
+  group_by(Mile) |>
+  mutate(proportion = total_count/sum(total_count),
+         weight = sum(total_count)) |>
+  ungroup() |>
+  filter(Mile %in% summary[summary$count != 0,]$Mile,
+         rubbishType %in% unique(types_join$rubbishType)) 
+
+ggplot(types_join_spatial,
+       aes(x = Mile*1.61, y = proportion*100, colour = rubbishType)) +
+  #geom_vline(xintercept = 1692, colour = "green", linewidth = 2) +
+  #geom_vline(xintercept = 2174, colour = "purple", linewidth = 2) +
+  geom_smooth(linewidth   = 1.1) +         # ← no confidence interval
+  labs(y = "Waste Percentage",
+       x = "Length of Trail (km)",
+       colour = NULL) +
+  theme_classic(base_size = 15)+
+  theme(legend.position = "none")+# keeps labels that stick out past the plot area
+  facet_wrap(rubbishType~.)
+
 
 grid2 = expand.grid(Mile = unique(summary$Mile), Morphology = unique(joined$Morphology))
 
@@ -368,7 +410,7 @@ morphs_join %>%
   #facet_grid(.~office) +
   theme_classic(base_size = 18) + 
   scale_fill_viridis_d() +
-  labs(y = "Mean Percent", x = "Trash Morphology")
+  labs(y = "Mean Percent", x = "Waste Morphology")
 
 #Percent that can be branded
 
@@ -378,49 +420,49 @@ sum(joined$totalNumberOfItemsTagged[joined$Brand != "other"])
 
 sum(joined$totalNumberOfItemsTagged[joined$Brand == "other"])/sum(joined$totalNumberOfItemsTagged)
 
-grid3 = expand.grid(Mile = unique(summary$Mile), Brand = unique(joined$Brand))
-
-brand_join <- joined |>
-  as.data.table(.data) |>
-  group_by(Mile, Brand) |>
-  summarise(total_count = sum(as.numeric(totalNumberOfItemsTagged))) |>
-  ungroup()|>
-  right_join(grid3) |>
-  mutate(total_count = ifelse(is.na(total_count), 0, total_count)) |>
-  group_by(Mile) |>
-  mutate(proportion = total_count/sum(total_count)) |>
-  ungroup() |>
-  filter(Mile %in% summary[summary$count != 0,]$Mile) |>
-  group_by(Brand) |>
-  summarise(mean_prop = mean(proportion), min_prop = BootMean(proportion)[1], max_prop = BootMean(proportion)[3])
-
-sum(brand_join$mean_prop)
-
-#Need to rearrange
-brand_join %>%
-  dplyr::filter(!is.na(Brand)) %>%
-  ggplot(aes(x = reorder(Brand, mean_prop), y = mean_prop * 100, ymin = min_prop*100 , ymax = max_prop*100)) +
-  geom_bar(stat="identity") +
-  geom_errorbar(colour="gray") +
-  #geom_point(position=position_dodge(width=0.9), aes(y=Percent), color = "gray") + 
-  coord_flip() +
-  #facet_grid(.~office) +
-  theme_classic(base_size = 20) + 
-  scale_fill_viridis_d() +
-  labs(y = "Mean Percent", x = "Trash Brand")
-
-brand_join %>%
-  dplyr::filter(!is.na(Brand)) %>%
-  #filter(mean_prop > 0.01) %>%
-  ggplot(aes(x = reorder(Brand, mean_prop), y = mean_prop * 100, ymin = min_prop*100 , ymax = max_prop*100)) +
-  geom_bar(stat="identity") +
-  geom_errorbar(colour="gray") +
-  #geom_point(position=position_dodge(width=0.9), aes(y=Percent), color = "gray") + 
-  coord_flip() +
-  #facet_grid(.~office) +
-  theme_classic(base_size = 12) + 
-  scale_fill_viridis_d() +
-  labs(y = "Mean Percent", x = "Trash Brand")
+# grid3 = expand.grid(Mile = unique(summary$Mile), Brand = unique(joined$Brand))
+# 
+# brand_join <- joined |>
+#   as.data.table(.data) |>
+#   group_by(Mile, Brand) |>
+#   summarise(total_count = sum(as.numeric(totalNumberOfItemsTagged))) |>
+#   ungroup()|>
+#   right_join(grid3) |>
+#   mutate(total_count = ifelse(is.na(total_count), 0, total_count)) |>
+#   group_by(Mile) |>
+#   mutate(proportion = total_count/sum(total_count)) |>
+#   ungroup() |>
+#   filter(Mile %in% summary[summary$count != 0,]$Mile) |>
+#   group_by(Brand) |>
+#   summarise(mean_prop = mean(proportion), min_prop = BootMean(proportion)[1], max_prop = BootMean(proportion)[3])
+# 
+# sum(brand_join$mean_prop)
+# 
+# #Need to rearrange
+# brand_join %>%
+#   dplyr::filter(!is.na(Brand)) %>%
+#   ggplot(aes(x = reorder(Brand, mean_prop), y = mean_prop * 100, ymin = min_prop*100 , ymax = max_prop*100)) +
+#   geom_bar(stat="identity") +
+#   geom_errorbar(colour="gray") +
+#   #geom_point(position=position_dodge(width=0.9), aes(y=Percent), color = "gray") + 
+#   coord_flip() +
+#   #facet_grid(.~office) +
+#   theme_classic(base_size = 20) + 
+#   scale_fill_viridis_d() +
+#   labs(y = "Mean Percent", x = "Trash Brand")
+# 
+# brand_join %>%
+#   dplyr::filter(!is.na(Brand)) %>%
+#   #filter(mean_prop > 0.01) %>%
+#   ggplot(aes(x = reorder(Brand, mean_prop), y = mean_prop * 100, ymin = min_prop*100 , ymax = max_prop*100)) +
+#   geom_bar(stat="identity") +
+#   geom_errorbar(colour="gray") +
+#   #geom_point(position=position_dodge(width=0.9), aes(y=Percent), color = "gray") + 
+#   coord_flip() +
+#   #facet_grid(.~office) +
+#   theme_classic(base_size = 12) + 
+#   scale_fill_viridis_d() +
+#   labs(y = "Mean Percent", x = "Trash Brand")
 
 
 ##OSM Spatial Analysis ----
@@ -429,30 +471,34 @@ library(osmdata)
 library(osmextract)
 library(sf)
 
-# Create a buffer of 1 km around each point
-#distances <- 2^(3:17)
+# summary <- readRDS("summary.RDS")
+# # Create a buffer of 1 km around each point
+# distances <- round(1.25^(10:45))
+# 
+# test <- logical(nrow(summary))
+# distance_to_road <- integer(nrow(summary))
+# 
+# for(distance in distances[1:length(distances)]){
+#   print(distance)
+#   buffers_sf <- st_buffer(summary[!test,], dist = distance)
+#   osm_results <- lapply(1:nrow(buffers_sf), 
+#                            function(x){
+#                              bbox <- st_bbox(buffers_sf[x,])
+#                              osm_data <- opq(bbox = bbox) %>%
+#                                add_osm_feature(key = "highway", value = c("motorway", "trunk", "primary", "secondary", "tertiary", "unclassified", "residential")) %>%
+#                                osmdata_sf()
+#                              osm_data 
+#                            })
+#   saveRDS(osm_results, paste0("osm_results",distance, ".rds"))
+#   roads <- vapply(osm_results, function(x){!is.null(x$osm_lines)}, FUN.VALUE = logical(1))
+#   saveRDS(data.frame(Mile = summary$Mile[!test], road_present = roads, distance = distance), paste0("osm_df_results",distance, ".rds"))
+#   distance_to_road[!test][roads] <- distance
+#   test[!test] <- test[!test] | roads
+#   print(sum(test)/length(test))
+# }
+# 
+# saveRDS(distance_to_road, paste0("distance_to_road.rds"))
 
-#test <- logical(nrow(summary))
-#distance_to_road <- integer(nrow(summary))
-
-#for(distance in distances[13:length(distances)]){
-#  print(distance)
-#  buffers_sf <- st_buffer(summary[!test,], dist = distance)
-#  osm_results <- lapply(1:nrow(buffers_sf), 
-#                           function(x){
-#                             bbox <- st_bbox(buffers_sf[x,])
-#                             osm_data <- opq(bbox = bbox) %>%
-#                               add_osm_feature(key = "highway", value = c("motorway", "trunk", "primary", "secondary", "tertiary", "unclassified", "residential")) %>%
-#                               osmdata_sf()
-#                             osm_data 
-#                           })
-#  saveRDS(osm_results, paste0("osm_results",distance, ".rds"))
-#  roads <- vapply(osm_results, function(x){!is.null(x$osm_lines)}, FUN.VALUE = logical(1))
-#  distance_to_road[!test][roads] <- distance
-#  test[!test] <- test[!test] | roads
-#}
-
-#saveRDS(distance_to_road, paste0("distance_to_road.rds"))
 distance_to_road <- readRDS(paste0("distance_to_road.rds"))
 
 summary$road_proximity <- distance_to_road
@@ -464,11 +510,59 @@ ggplot(summary, aes(x = road_proximity, y = count)) +
   geom_smooth(method = "lm") +
   theme_classic(base_size = 14) +
   ggplot2::coord_fixed() +
-  labs(x = "Road Proximity (m)", y = "Trash Count per km")
+  labs(x = "Road Proximity (m)", y = "Waste Count per km")
+
+ggplot() +
+  #geom_hline(yintercept = 1) +
+  geom_text(aes(x = 1500, y = 100000, label = "California")) +
+  geom_text(aes(x = 3100, y = 100000, label = "Oregon")) +
+  geom_text(aes(x = 4000, y = 100000, label = "Washington")) +
+  geom_text(aes(x = 100, y = 1, label = "Mexico")) +
+  geom_text(aes(x = 4300, y = 1, label = "Canada")) +
+  geom_vline(xintercept = 1692*1.61) +
+  geom_vline(xintercept = 2174*1.61) +
+  geom_point(data = summary, aes(x = Mile*1.61, y = road_proximity), color = "black") +
+  theme_classic(base_size = 15) +
+  labs(y = "Road Proximity (m)", x = "Length of Trail (km)") +
+  scale_y_log10() +
+  geom_smooth(data = summary, aes(x = Mile*1.61, y = road_proximity)) 
+
+
+types_road_rel <- types_join_spatial |> left_join(summary)
+
+library(mgcv)
+library(betareg)
+ggplot(types_road_rel,
+       aes(x = road_proximity, 
+           y = proportion, 
+           colour = rubbishType)) +
+  #geom_point() +
+  #geom_vline(xintercept = 1692, colour = "green", linewidth = 2) +
+  #geom_vline(xintercept = 2174, colour = "purple", linewidth = 2) +
+  # 
+  geom_smooth(method      = "glm",
+              formula     = y ~ x,                  # linear trend on logit scale
+              method.args = list(family = quasibinomial(link = "logit")),
+              #se          = FALSE,
+              linewidth   = 1.1) +
+
+# ← no confidence interval
+  labs(y = "Waste Percentage",
+       x = "Road Proximity (m)",
+       colour = NULL) +
+  theme_classic(base_size = 15)+
+  theme(legend.position = "none")+# keeps labels that stick out past the plot area
+  facet_wrap(rubbishType~., scales = "free")
+
 
 model <- lm(log10(count)~log10(road_proximity), data = summary)
 summary(model) 
 
+#10 km
+10^(log10(10000) * model$coefficients[2] + model$coefficients[1])
+
+#10 m
+10^(log10(10) * model$coefficients[2] + model$coefficients[1])
 
 ## Raw data reading from API ----
 # set the API endpoint
