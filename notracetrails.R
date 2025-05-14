@@ -52,8 +52,10 @@ full_points <- sf::read_sf("Full Points.geojson") %>%
          rubbish_run_y = as.numeric(rubbish_run_y)) %>%
   as.data.table() %>%
   mutate(Mile = as.integer(Mile)) %>%
-  filter(Mile != 490) %>%
-  mutate(Mile = ifelse(grepl("mile 490 survey,", runDescription), 490, Mile))
+  filter(Mile != 490, 
+         Name != "x85t5P03iIF7zapu8rbf") %>%
+  mutate(Mile = ifelse(grepl("mile 490 survey,", runDescription), 490, Mile)) %>%
+  mutate(Mile = ifelse(grepl("mile 2320", runDescription), 2320, Mile))
 
 full_summary <- sf::read_sf("Full Summary.geojson") %>%
   filter(!Survey_Type %in% c("unconfirmed", "skipped", "uncomfirmed")) %>%
@@ -91,10 +93,12 @@ joined <- inner_join(full_points, full_summary, by = "Mile") %>%
     totalNumberOfItemsTagged == 0 ~ NA,
     .default = Brand
   )) %>%
-  mutate(Number_Of_People = as.numeric(gsub(" .*", "", str_extract(pattern = "([0-9] surveyer)|([0-9] people)|([0-9] cleaners)|([0-9] person)", runDescription)))) %>%
+  mutate(runDescription = gsub("two surveyers", "2 surveyers", runDescription)) %>%
+  mutate(runDescription = gsub("1person", "1 surveyer", runDescription)) %>%
+  mutate(Number_Of_People = as.numeric(gsub(" .*", "", str_extract(pattern = "([0-9] surveyer)|([0-9] people)|([0-9] cleaners)|([0-9] person)|([0-9]person)|([0-9] suveyer)", runDescription)))) %>%
   mutate(Number_Of_People = ifelse(Number_Of_People == 0, NA, Number_Of_People)) %>%
   mutate(Reported_Mile_Marker = str_extract(pattern = "(mile [0-9]*)|([0-9]* mile)", runDescription)) %>%
-  mutate(Is_Control = grepl("(DUPLICATE)|(REPEAT)", runDescription)) %>%
+  mutate(Is_Control = grepl("(DUPLICATE)|(REPEAT)|(duplicate)", runDescription)) %>%
   mutate(Extrapolation_Mile_Fraction = case_when(
     grepl("0.03 miles, stopped at 100 items, 2 suveyers; lots more trash in", runDescription) ~ 0.03,
     grepl("0.41 miles to hit 100 pieces, 2 surveyers; trail followed dirt road- surveyed road and not sides", runDescription) ~ 0.41,
@@ -203,6 +207,7 @@ surveyor_test <- summary_prep |>
   ungroup() |>
   as.data.frame() |>
   filter(Number_Of_People < 5) #This point has too much leverage. 
+options(scipen = 99)
 
 ggplot(surveyor_test, aes(x = Number_Of_People, y = count)) +
   geom_point() +
@@ -259,7 +264,7 @@ ggplot() +
   geom_vline(xintercept = 2174*1.61) +
     geom_point(data = summary, aes(x = Mile*1.61, y = count), color = "black") +
     theme_classic(base_size = 15) +
-    labs(y = "Waste Count per km (log10 scale)", x = "Length of Trail (km)") +
+    labs(y = "Waste Count per km (log10 scale)", x = "Distance Along Trail (km)") +
     scale_y_log10(breaks = c(10^(-2:4))) +
   geom_smooth(data = summary, aes(x = Mile*1.61, y = count)) 
  
@@ -372,7 +377,7 @@ ggplot(types_join_spatial,
   #geom_vline(xintercept = 2174, colour = "purple", linewidth = 2) +
   geom_smooth(linewidth   = 1.1) +         # ← no confidence interval
   labs(y = "Waste Percentage",
-       x = "Length of Trail (km)",
+       x = "Distance Along Trail (km)",
        colour = NULL) +
   theme_classic(base_size = 15)+
   theme(legend.position = "none")+# keeps labels that stick out past the plot area
@@ -481,13 +486,13 @@ library(sf)
 # for(distance in distances[1:length(distances)]){
 #   print(distance)
 #   buffers_sf <- st_buffer(summary[!test,], dist = distance)
-#   osm_results <- lapply(1:nrow(buffers_sf), 
+#   osm_results <- lapply(1:nrow(buffers_sf),
 #                            function(x){
 #                              bbox <- st_bbox(buffers_sf[x,])
 #                              osm_data <- opq(bbox = bbox) %>%
 #                                add_osm_feature(key = "highway", value = c("motorway", "trunk", "primary", "secondary", "tertiary", "unclassified", "residential")) %>%
 #                                osmdata_sf()
-#                              osm_data 
+#                              osm_data
 #                            })
 #   saveRDS(osm_results, paste0("osm_results",distance, ".rds"))
 #   roads <- vapply(osm_results, function(x){!is.null(x$osm_lines)}, FUN.VALUE = logical(1))
@@ -496,8 +501,8 @@ library(sf)
 #   test[!test] <- test[!test] | roads
 #   print(sum(test)/length(test))
 # }
-# 
-# saveRDS(distance_to_road, paste0("distance_to_road.rds"))
+
+#saveRDS(distance_to_road, paste0("distance_to_road.rds"))
 
 distance_to_road <- readRDS(paste0("distance_to_road.rds"))
 
@@ -523,7 +528,7 @@ ggplot() +
   geom_vline(xintercept = 2174*1.61) +
   geom_point(data = summary, aes(x = Mile*1.61, y = road_proximity), color = "black") +
   theme_classic(base_size = 15) +
-  labs(y = "Road Proximity (m)", x = "Length of Trail (km)") +
+  labs(y = "Road Proximity (m)", x = "Distance Along Trail (km)") +
   scale_y_log10() +
   geom_smooth(data = summary, aes(x = Mile*1.61, y = road_proximity)) 
 
