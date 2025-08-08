@@ -211,7 +211,7 @@ options(scipen = 99)
 
 ggplot(surveyor_test, aes(x = Number_Of_People, y = count)) +
   geom_point() +
-  scale_y_log10() +
+  scale_y_log10(breaks = 10^c(-3:4)) +
   geom_smooth(method = "lm") +
   theme_classic(base_size = 14) +
   labs(y = "Waste Count per km (log10 scale)", x = "Number of Surveyors")
